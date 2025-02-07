@@ -1,109 +1,99 @@
+// app/api/schema/route.ts
 import { NextResponse } from 'next/server'
-import { getConnection, getDbType } from '@/lib/db'
+import { Pool } from 'pg'
 
-export async function GET(req: Request) {
-  const connection = getConnection()
-  const dbType = getDbType()
+// Create a pool connection with your specific credentials
+const pool = new Pool({
+  user: 'postgres',
+  password: '12345', // replace with your actual password
+  host: '202.178.125.77',
+  port: 5443,
+  database: 'dev-qamel'
+})
 
-  if (!connection) {
-    return NextResponse.json({ error: 'Not connected to a database' }, { status: 400 })
-  }
+// Add connection error handling
+pool.on('error', (err) => {
+  console.error('Unexpected error on idle client', err)
+  process.exit(-1)
+})
 
+export async function GET() {
+  let client;
   try {
-    let schema
-    switch (dbType) {
-      case 'postgresql':
-        schema = await getPostgresSchema(connection)
-        break
-      case 'mysql':
-        schema = await getMySQLSchema(connection)
-        break
-      case 'mongodb':
-        schema = await getMongoDBSchema(connection)
-        break
-      default:
-        throw new Error('Unsupported database type')
-    }
-    return NextResponse.json(schema)
+    // Test connection
+    client = await pool.connect()
+    console.log("Database connected successfully")
+
+// app/api/schema/route.ts
+// Update the query to better expose foreign key relationships
+const schemaQuery = `
+  WITH fk_info AS (
+    SELECT
+      tc.table_name,
+      kcu.column_name,
+      ccu.table_name AS foreign_table,
+      ccu.column_name AS foreign_column
+    FROM information_schema.table_constraints tc 
+    JOIN information_schema.key_column_usage kcu
+      ON tc.constraint_name = kcu.constraint_name
+    JOIN information_schema.constraint_column_usage ccu
+      ON tc.constraint_name = ccu.constraint_name
+    WHERE tc.constraint_type = 'FOREIGN KEY'
+  )
+  SELECT 
+    t.table_name,
+    json_agg(
+      json_build_object(
+        'name', c.column_name,
+        'type', c.data_type,
+        'is_primary', EXISTS (
+          SELECT 1 FROM information_schema.table_constraints tc
+          JOIN information_schema.key_column_usage kcu 
+            ON tc.constraint_name = kcu.constraint_name
+          WHERE tc.table_name = t.table_name 
+            AND kcu.column_name = c.column_name
+            AND tc.constraint_type = 'PRIMARY KEY'
+        ),
+        'foreign_key', (
+          SELECT json_build_object(
+            'table', fk.foreign_table,
+            'column', fk.foreign_column
+          )
+          FROM fk_info fk
+          WHERE fk.table_name = t.table_name 
+            AND fk.column_name = c.column_name
+        )
+      )
+      ORDER BY c.ordinal_position
+    ) as columns
+  FROM information_schema.tables t
+  JOIN information_schema.columns c ON t.table_name = c.table_name
+  WHERE t.table_schema = 'public'
+    AND t.table_type = 'BASE TABLE'
+  GROUP BY t.table_name;
+`;
+
+// ... rest of the API code ...
+    const result = await client.query(schemaQuery)
+    console.log("Query executed successfully:", result.rows)
+
+    return NextResponse.json({
+      success: true,
+      schema: result.rows.map(row => ({
+        name: row.table_name,
+        columns: row.columns
+      }))
+    })
+
   } catch (error) {
-    console.error('Failed to fetch schema:', error)
-    return NextResponse.json({ error: 'Failed to fetch schema' }, { status: 500 })
-  }
-}
-
-async function getPostgresSchema(connection) {
-  const result = await connection.query(`
-    SELECT 
-      table_name, 
-      column_name, 
-      data_type
-    FROM 
-      information_schema.columns
-    WHERE 
-      table_schema = 'public'
-    ORDER BY 
-      table_name, 
-      ordinal_position
-  `)
-  
-  const schema = { tables: [] }
-  let currentTable = null
-  
-  for (const row of result.rows) {
-    if (currentTable?.name !== row.table_name) {
-      if (currentTable) schema.tables.push(currentTable)
-      currentTable = { name: row.table_name, columns: [] }
+    console.error("Error fetching schema:", error)
+    return NextResponse.json({ 
+      success: false, 
+      error: error.message || "Failed to fetch schema" 
+    }, { status: 500 })
+  } finally {
+    if (client) {
+      client.release()
     }
-    currentTable.columns.push({ name: row.column_name, type: row.data_type })
   }
-  
-  if (currentTable) schema.tables.push(currentTable)
-  
-  return schema
-}
-
-async function getMySQLSchema(connection) {
-  const [rows] = await connection.query(`
-    SELECT 
-      TABLE_NAME, 
-      COLUMN_NAME, 
-      DATA_TYPE
-    FROM 
-      INFORMATION_SCHEMA.COLUMNS
-    WHERE 
-      TABLE_SCHEMA = DATABASE()
-    ORDER BY 
-      TABLE_NAME, 
-      ORDINAL_POSITION
-  `)
-  
-  const schema = { tables: [] }
-  let currentTable = null
-  
-  for (const row of rows) {
-    if (currentTable?.name !== row.TABLE_NAME) {
-      if (currentTable) schema.tables.push(currentTable)
-      currentTable = { name: row.TABLE_NAME, columns: [] }
-    }
-    currentTable.columns.push({ name: row.COLUMN_NAME, type: row.DATA_TYPE })
-  }
-  
-  if (currentTable) schema.tables.push(currentTable)
-  
-  return schema
-}
-
-async function getMongoDBSchema(connection) {
-  const db = connection.db()
-  const collections = await db.listCollections().toArray()
-  
-  const schema = { tables: [] }
-  
-  for (const collection of collections) {
-    const sample = await db.collection(collection.name).findOne()
-    const columns = Object.keys(sample).map(key => ({ name: key, type: typeof sample[key] }))
-    schema.tables.push({ name: collection.name, columns })
-  }
-  
-  return schema
 }

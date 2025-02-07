@@ -39,13 +39,24 @@ export default function TableList({ schema, onCommentChange }: TableListProps) {
     }
   }
 
-  if (!schema || schema.tables.length === 0) {
+
+  if (!schema?.tables || schema.tables.length === 0) {
     return (
       <Card>
         <CardHeader>
           <CardTitle>Tables</CardTitle>
           <CardDescription>No tables found in the schema</CardDescription>
         </CardHeader>
+        <CardContent>
+          <Alert>
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>No Data</AlertTitle>
+            <AlertDescription>
+              No tables were found in the current database schema. 
+              Please make sure you have the correct connection and permissions.
+            </AlertDescription>
+          </Alert>
+        </CardContent>
       </Card>
     )
   }
@@ -54,7 +65,7 @@ export default function TableList({ schema, onCommentChange }: TableListProps) {
     <div className="grid grid-cols-2 gap-4">
       <Card>
         <CardHeader>
-          <CardTitle>Tables</CardTitle>
+          <CardTitle>Tables ({schema.tables.length})</CardTitle>
           <CardDescription>Click on a table to view details</CardDescription>
         </CardHeader>
         <CardContent>
@@ -62,6 +73,7 @@ export default function TableList({ schema, onCommentChange }: TableListProps) {
             <TableHeader>
               <TableRow>
                 <TableHead>Table Name</TableHead>
+                <TableHead>Columns</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -72,6 +84,7 @@ export default function TableList({ schema, onCommentChange }: TableListProps) {
                   onClick={() => handleTableClick(table)}
                 >
                   <TableCell>{table.name}</TableCell>
+                  <TableCell>{table.columns.length}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

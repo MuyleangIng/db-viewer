@@ -18,26 +18,55 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import "reactflow/dist/style.css"
 
+interface Column {
+  name: string
+  type: string
+  is_nullable: boolean
+  is_primary: boolean
+  references?: {
+    table: string
+    column: string
+  }
+}
+
+interface Table {
+  name: string
+  columns: Column[]
+}
+
+interface Schema {
+  tables: Table[]
+}
+
 interface DatabaseDiagramProps {
+  schema: Schema | null
   dbType: string
 }
 
 // Custom node for database tables
 const TableNode = ({ data }) => {
   return (
-    <div
-      className={`bg-white border-2 ${data.isHighlighted ? "border-yellow-400" : "border-primary"} rounded-lg shadow-lg p-4 min-w-[200px]`}
-    >
-      <div
-        className={`font-bold text-lg border-b-2 ${data.isHighlighted ? "border-yellow-400" : "border-primary"} pb-2 mb-2`}
-      >
+    <div className={`bg-white border-2 ${data.isHighlighted ? "border-yellow-400" : "border-primary"} rounded-lg shadow-lg p-4 min-w-[250px]`}>
+      <div className={`font-bold text-lg border-b-2 ${data.isHighlighted ? "border-yellow-400" : "border-primary"} pb-2 mb-2`}>
         {data.label}
       </div>
       <div className="space-y-1">
-        {data.columns?.map((column, index) => (
-          <div key={index} className="text-sm flex items-center justify-between">
-            <span className="font-medium">{column.name}</span>
-            <span className="text-muted-foreground">{column.type}</span>
+        {data.columns?.map((column: Column, index: number) => (
+          <div 
+            key={index} 
+            className={`text-sm flex items-center justify-between ${
+              column.is_primary ? 'text-primary font-bold' : 
+              column.references ? 'text-blue-600' : ''
+            }`}
+          >
+            <span className="font-medium flex items-center gap-1">
+              {column.is_primary && "🔑"}
+              {column.references && "→"}
+              {column.name}
+            </span>
+            <span className={`text-muted-foreground ${column.is_nullable ? 'italic' : ''}`}>
+              {column.type}
+            </span>
           </div>
         ))}
       </div>
@@ -49,7 +78,7 @@ const nodeTypes = {
   tableNode: TableNode,
 }
 
-export default function DatabaseDiagram({ dbType }: DatabaseDiagramProps) {
+export default function DatabaseDiagram({ schema, dbType }: DatabaseDiagramProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [isLoading, setIsLoading] = useState(true)
@@ -57,9 +86,9 @@ export default function DatabaseDiagram({ dbType }: DatabaseDiagramProps) {
   const [searchTerm, setSearchTerm] = useState("")
   const [reactFlowInstance, setReactFlowInstance] = useState(null)
 
-  const calculateNodePositions = useCallback((tables) => {
-    const VERTICAL_SPACING = 200
-    const HORIZONTAL_SPACING = 300
+  const calculateNodePositions = useCallback((tables: Table[]) => {
+    const VERTICAL_SPACING = 250
+    const HORIZONTAL_SPACING = 350
     const MAX_COLUMNS = 3
 
     return tables.map((table, index) => ({
@@ -79,24 +108,29 @@ export default function DatabaseDiagram({ dbType }: DatabaseDiagramProps) {
     }))
   }, [])
 
-  const calculateEdges = useCallback((tables) => {
+  const calculateEdges = useCallback((tables: Table[]) => {
     const edges = []
     tables.forEach((table) => {
       table.columns.forEach((column) => {
         if (column.references) {
           edges.push({
-            id: `${table.name}-${column.references}`,
+            id: `${table.name}-${column.name}-${column.references.table}`,
             source: table.name,
-            target: column.references,
+            target: column.references.table,
             type: "smoothstep",
             markerEnd: {
               type: MarkerType.ArrowClosed,
             },
             animated: true,
             style: {
-              strokeWidth: 2,
+              strokeWidth: 1.5,
+              stroke: '#666',
             },
-            label: column.name,
+            label: `${column.name} → ${column.references.column}`,
+            labelStyle: { fill: '#666', fontSize: 12 },
+            labelBgPadding: [8, 4],
+            labelBgBorderRadius: 4,
+            labelBgStyle: { fill: '#fff', opacity: 0.8 },
           })
         }
       })
@@ -104,40 +138,15 @@ export default function DatabaseDiagram({ dbType }: DatabaseDiagramProps) {
     return edges
   }, [])
 
-  const fetchSchema = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const response = await fetch("/api/schema")
-      if (!response.ok) {
-        throw new Error(`Failed to fetch schema: ${response.statusText}`)
-      }
-      const schema = await response.json()
-
-      if (!schema.tables || !Array.isArray(schema.tables)) {
-        throw new Error("Invalid schema format received")
-      }
-
+  useEffect(() => {
+    if (schema?.tables) {
       const newNodes = calculateNodePositions(schema.tables)
       const newEdges = calculateEdges(schema.tables)
-
       setNodes(newNodes)
       setEdges(newEdges)
-    } catch (error) {
-      console.error("Failed to fetch schema:", error)
-      setError(error instanceof Error ? error.message : "Failed to fetch database schema")
-    } finally {
       setIsLoading(false)
     }
-  }, [calculateNodePositions, calculateEdges, setNodes, setEdges])
-
-  useEffect(() => {
-    fetchSchema()
-  }, [fetchSchema])
-
-  const handleRetry = () => {
-    fetchSchema()
-  }
+  }, [schema, calculateNodePositions, calculateEdges, setNodes, setEdges])
 
   const handleSearch = useCallback(
     (term: string) => {
@@ -149,7 +158,10 @@ export default function DatabaseDiagram({ dbType }: DatabaseDiagramProps) {
             ...node.data,
             isHighlighted:
               node.data.label.toLowerCase().includes(term.toLowerCase()) ||
-              node.data.columns.some((column) => column.name.toLowerCase().includes(term.toLowerCase())),
+              node.data.columns.some((column: Column) => 
+                column.name.toLowerCase().includes(term.toLowerCase()) ||
+                column.type.toLowerCase().includes(term.toLowerCase())
+              ),
           },
         })),
       )
@@ -175,22 +187,20 @@ export default function DatabaseDiagram({ dbType }: DatabaseDiagramProps) {
     }
   }, [reactFlowInstance])
 
-  if (error) {
+  if (!schema?.tables) {
     return (
       <Card>
         <CardHeader>
           <CardTitle>Database Schema Diagram</CardTitle>
-          <CardDescription>Visual representation of your database schema</CardDescription>
+          <CardDescription>No schema available</CardDescription>
         </CardHeader>
         <CardContent>
-          <Alert variant="destructive" className="mb-4">
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
+          <Alert>
+            <AlertTitle>No Data</AlertTitle>
+            <AlertDescription>
+              No database schema is currently available. Please connect to a database first.
+            </AlertDescription>
           </Alert>
-          <Button onClick={handleRetry} variant="outline">
-            <ReloadIcon className="mr-2 h-4 w-4" />
-            Retry
-          </Button>
         </CardContent>
       </Card>
     )
@@ -251,4 +261,3 @@ export default function DatabaseDiagram({ dbType }: DatabaseDiagramProps) {
     </Card>
   )
 }
-
